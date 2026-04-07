@@ -30,6 +30,14 @@ deno compile --allow-all llmact.ts
 chmod +x llmact
 ```
 
+### Prepare env
+
+```bash
+export LLM_API_URL="http://localhost:11434/v1/chat/completions"
+export LLM_API_KEY="ollama"
+export LLM_MODEL="gemma4:e2b"
+```
+
 ### Creating actors
 
 ```bash
