@@ -37,16 +37,25 @@ const locks = new Map<string, Promise<void>>();
 
 async function acquireLock(name: string, debug: boolean): Promise<() => void> {
   const lf = lockFile(name);
+  let waitStart = 0;
 
   const waitForLock = async () => {
     while (true) {
       try {
         if (!(await exists(lf))) {
           await Deno.writeTextFile(lf, `${Deno.pid} ${Date.now()}`);
-          if (debug) console.log(`[LOCK] Acquired lock for: ${name}`);
+          if (debug) {
+            const waited = waitStart
+              ? ` (waited ${Date.now() - waitStart}ms)`
+              : "";
+            console.log(`[LOCK] Acquired${waited}: ${name}`);
+          }
           return;
         }
-        if (debug) console.log(`[LOCK] Waiting for lock: ${name}`);
+        if (debug) {
+          if (!waitStart) waitStart = Date.now();
+          console.log(`[LOCK] Waiting for lock: ${name}...`);
+        }
         await new Promise((r) => setTimeout(r, 100));
       } catch {
         await Deno.writeTextFile(lf, `${Deno.pid} ${Date.now()}`);
@@ -94,27 +103,29 @@ const TOOLS = [
     type: "function",
     function: {
       name: "calculator",
-      description: "Evaluate a mathematical expression. Use for calculations like 2+2, 10*5, sqrt(16), etc.",
+      description:
+        "Evaluate a mathematical expression. Use for calculations like 2+2, 10*5, sqrt(16), etc.",
       parameters: {
         type: "object",
         properties: {
           expression: {
             type: "string",
-            description: "Mathematical expression (e.g., '10 * 0.30' or '100 + 50')"
-          }
+            description:
+              "Mathematical expression (e.g., '10 * 0.30' or '100 + 50')",
+          },
         },
-        required: ["expression"]
-      }
-    }
+        required: ["expression"],
+      },
+    },
   },
   {
-    type: "function", 
+    type: "function",
     function: {
       name: "get_current_time",
       description: "Get the current date and time.",
-      parameters: { type: "object", properties: {} }
-    }
-  }
+      parameters: { type: "object", properties: {} },
+    },
+  },
 ];
 
 function executeTool(name: string, args: Record<string, any>): string {
@@ -149,7 +160,11 @@ interface LLMResult {
   toolCalls: ToolCall[];
 }
 
-async function callLLM(messages: any[], debug: boolean = false, useTools: boolean = false): Promise<LLMResult> {
+async function callLLM(
+  messages: any[],
+  debug: boolean = false,
+  useTools: boolean = false,
+): Promise<LLMResult> {
   const body: any = {
     model: MODEL,
     temperature: TEMPERATURE,
@@ -159,7 +174,10 @@ async function callLLM(messages: any[], debug: boolean = false, useTools: boolea
   if (useTools) {
     body.tools = TOOLS;
     body.tool_choice = "auto";
-    if (debug) console.log(`[DEBUG] Sending ${TOOLS.length} tools: ${TOOLS.map(t => t.function.name).join(", ")}`);
+    if (debug)
+      console.log(
+        `[DEBUG] Sending ${TOOLS.length} tools: ${TOOLS.map((t) => t.function.name).join(", ")}`,
+      );
   }
 
   const res = await fetch(API_URL, {
@@ -178,21 +196,24 @@ async function callLLM(messages: any[], debug: boolean = false, useTools: boolea
   const json = await res.json();
   const choice = json.choices?.[0];
   const allToolCalls: ToolCall[] = [];
-  
+
   if (useTools && choice?.message?.tool_calls) {
     const toolCalls = choice.message.tool_calls;
     if (debug) console.log(`[TOOL] ${toolCalls.length} call(s)`);
-    
+
     const toolResults = toolCalls.map((tc: any) => {
       const args = JSON.parse(tc.function.arguments);
       const result = executeTool(tc.function.name, args);
-      if (debug) console.log(`[TOOL] ${tc.function.name}(${JSON.stringify(args)}) = ${result}`);
+      if (debug)
+        console.log(
+          `[TOOL] ${tc.function.name}(${JSON.stringify(args)}) = ${result}`,
+        );
       allToolCalls.push({ name: tc.function.name, args, result });
       return {
         tool_call_id: tc.id,
         role: "tool",
         name: tc.function.name,
-        content: result
+        content: result,
       };
     });
 
@@ -200,7 +221,7 @@ async function callLLM(messages: any[], debug: boolean = false, useTools: boolea
     const recursiveResult = await callLLM(messages, debug, false);
     return {
       content: recursiveResult.content,
-      toolCalls: [...allToolCalls, ...recursiveResult.toolCalls]
+      toolCalls: [...allToolCalls, ...recursiveResult.toolCalls],
     };
   }
 
@@ -209,7 +230,9 @@ async function callLLM(messages: any[], debug: boolean = false, useTools: boolea
   if (debug) {
     const usage = json.usage || {};
     totalTokens += usage.total_tokens || 0;
-    console.log(`[DEBUG] Tokens: total=${usage.total_tokens || 0}, cumulative=${totalTokens}`);
+    console.log(
+      `[DEBUG] Tokens: total=${usage.total_tokens || 0}, cumulative=${totalTokens}`,
+    );
   }
 
   return { content, toolCalls: allToolCalls };
@@ -309,7 +332,7 @@ AVAILABLE TOOLS:
 - calculator(expression): Calculate math (e.g., "10 * 0.30" for 30% of 10)
 - get_current_time(): Get current datetime
 
-Use calculator when you need to compute values like tax, commission, totals.
+Use calculator when you need to compute values like number, tax, commission, totals.
 
 OUTPUT FORMAT:
 ## NEW_STATE
@@ -437,14 +460,14 @@ async function runActor(
         debug,
         true, // useTools
       );
-      
+
       lastOutput = result.content;
       allToolCalls.push(...result.toolCalls);
 
       parsed = parseOutput(lastOutput);
 
       if (parsed) break;
-      
+
       lastError = lastOutput;
     }
 
@@ -455,12 +478,15 @@ async function runActor(
     }
 
     await Deno.writeTextFile(sf, parsed.state);
-    
+
     let logEntry = `## ${new Date().toISOString()}\n${input}\n\n${parsed.log}`;
     if (allToolCalls.length > 0) {
-      const toolLog = allToolCalls.map(tc => 
-        `[TOOL] ${tc.name}(${JSON.stringify(tc.args)}) = ${tc.result}`
-      ).join("\n");
+      const toolLog = allToolCalls
+        .map(
+          (tc) =>
+            `[TOOL] ${tc.name}(${JSON.stringify(tc.args)}) = ${tc.result}`,
+        )
+        .join("\n");
       logEntry += `\n\n${toolLog}`;
     }
     await appendFile(mf, `\n${logEntry}`);
@@ -470,7 +496,7 @@ async function runActor(
       console.log(buildPrompt(def, state, deps, input));
       console.log("[DEBUG] Response:", lastOutput);
     }
-    
+
     console.log(parsed.log);
     if (debug) {
       console.log("\n--- STATE ---");
@@ -571,11 +597,7 @@ OR simply:
 Definition is adequate.`;
 }
 
-async function evolveActor(
-  name: string,
-  issue: string,
-  debug: boolean,
-) {
+async function evolveActor(name: string, issue: string, debug: boolean) {
   const release = await acquireLock(name, debug);
   const requestId = crypto.randomUUID().slice(0, 8);
 

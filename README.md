@@ -43,8 +43,8 @@ chmod +x llmact
 
 export LLM_API_URL="http://localhost:11434/v1/chat/completions"
 export LLM_API_KEY="ollama"
-export LLM_MODEL="gemma4:e2b"
-# export LLM_MODEL="gemma4:31b-cloud"
+# export LLM_MODEL="gemma4:e2b"
+export LLM_MODEL="gemma4:31b-cloud"
 export LLM_TEMPERATURE=0
 ```
 
@@ -58,9 +58,9 @@ export LLM_TEMPERATURE=0
 ./llmact ask --name cart "What is the total?"
 
 # Calculator with tool calling
-./llmact init --force --name calc "Calculator that tracks numbers"
-./llmact msg --debug --name calc "Calculate 30% of 100"
-./llmact msg --debug --name calc "Add 50 and 25"
+./llmact init --force --name calc "A simple calculator actor that tracks numbers and performs arithmetic operations"
+./llmact msg --debug --name calc "Calculate 30% of 100 = ?"
+./llmact msg --debug --name calc "Add 50 and 25 = ?"
 ```
 
 ## Files
