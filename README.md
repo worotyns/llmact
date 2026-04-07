@@ -17,7 +17,9 @@ commands, and aggregate their states.
 - `--force` - overwrite an existing actor.
 - `--deps <otherActor>` - used when running commands to include other actors'
   states.
+- `--debug` - show debug information and token usage stats.
 - Execute commands on actors (`llmact msg --name <name> "command"`).
+- Ask questions about actor state (`llmact ask --name <name> "question"`).
 
 ---
 
@@ -36,6 +38,8 @@ chmod +x llmact
 export LLM_API_URL="http://localhost:11434/v1/chat/completions"
 export LLM_API_KEY="ollama"
 export LLM_MODEL="gemma4:e2b"
+# or
+export LLM_MODEL="gpt-oss:20b:cloud"
 ```
 
 ### Creating actors
@@ -60,6 +64,19 @@ export LLM_MODEL="gemma4:e2b"
 
 # Aggregate states (sum first and second)
 ./llmact msg --name aggregate "sum up all deps" --deps first --deps second
+```
+
+### Asking questions about state
+
+```bash
+# Ask about current counter value
+./llmact ask --name second "what are current value of counter?"
+
+# Ask about aggregates with dependencies
+./llmact ask --name aggregate "how many dependencies you sum up last time?" --deps first --deps second
+
+# With debug info
+./llmact ask --name first "what is the state?" --debug
 ```
 
 ### Viewing state and logs

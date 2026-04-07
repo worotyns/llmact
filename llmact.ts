@@ -44,7 +44,7 @@ async function appendFile(path: string, content: string) {
 }
 
 // ---- LLM ----
-async function callLLM(messages: any[]) {
+async function callLLM(messages: any[], debug: boolean = false) {
   const res = await fetch(API_URL, {
     method: "POST",
     headers: {
@@ -58,8 +58,22 @@ async function callLLM(messages: any[]) {
     }),
   });
 
+  if (!res.ok) {
+    throw new Error(`Cannot call LLM ${res.status} ${res.statusText}`);
+  }
+
   const json = await res.json();
-  return json.choices?.[0]?.message?.content || json.message?.content || "";
+  const content = json.choices?.[0]?.message?.content || json.message?.content || "";
+  
+  if (debug) {
+    const usage = json.usage || {};
+    console.log("\n[DEBUG] LLM Response:");
+    console.log(`[DEBUG] Prompt tokens: ${usage.prompt_tokens || 'N/A'}`);
+    console.log(`[DEBUG] Completion tokens: ${usage.completion_tokens || 'N/A'}`);
+    console.log(`[DEBUG] Total tokens: ${usage.total_tokens || 'N/A'}`);
+  }
+  
+  return content;
 }
 
 // ---- INIT ----
@@ -88,7 +102,7 @@ OUTPUT TWO FILES:
 Only markdown. Separate files with the markers above.`;
 }
 
-async function initActor(name: string, desc: string, force: boolean) {
+async function initActor(name: string, desc: string, force: boolean, debug: boolean) {
   const df = defFile(name);
   const sf = stateFile(name);
   const mf = messagesFile(name);
@@ -97,11 +111,16 @@ async function initActor(name: string, desc: string, force: boolean) {
     console.log("⚠️ actor exists. use --force");
     return;
   }
+  
+  if (debug) {
+    console.log("[DEBUG] Creating actor:", name);
+    console.log("[DEBUG] Description:", desc);
+  }
 
   const output = await callLLM([
     { role: "system", content: initSystemPrompt() },
     { role: "user", content: desc },
-  ]);
+  ], debug);
 
   const defMatch = output.match(/---DEFINITION---([\s\S]*?)---STATE---/);
   const stateMatch = output.match(/---STATE---([\s\S]*)/);
@@ -163,7 +182,7 @@ async function loadDeps(names: string[]) {
   return out;
 }
 
-async function runActor(name: string, input: string, depsNames: string[]) {
+async function runActor(name: string, input: string, depsNames: string[], debug: boolean) {
   const df = defFile(name);
   const sf = stateFile(name);
   const mf = messagesFile(name);
@@ -176,13 +195,19 @@ async function runActor(name: string, input: string, depsNames: string[]) {
     console.error("missing actor definition. run init");
     return;
   }
+  
+  if (debug) {
+    console.log("[DEBUG] Running actor:", name);
+    console.log("[DEBUG] Input:", input);
+    console.log("[DEBUG] Dependencies:", depsNames.join(", ") || "none");
+  }
 
   console.log(buildPrompt(def, state, deps, input));
 
   const output = await callLLM([
     { role: "system", content: runSystemPrompt() },
     { role: "user", content: buildPrompt(def, state, deps, input) },
-  ]);
+  ], debug);
 
   const parsed = parseOutput(output);
 
@@ -203,10 +228,59 @@ async function runActor(name: string, input: string, depsNames: string[]) {
   console.log(parsed.state);
 }
 
+// ---- ASK ----
+function askSystemPrompt() {
+  return `You are an ACTOR STATE ANALYZER.
+You answer questions about the actor's current state.
+Be concise and factual.
+Only answer based on the provided state information.`;
+}
+
+async function askActor(name: string, question: string, depsNames: string[], debug: boolean) {
+  const df = defFile(name);
+  const sf = stateFile(name);
+
+  const def = await readFileSafe(df);
+  const state = await readFileSafe(sf);
+  const deps = await loadDeps(depsNames);
+
+  if (!def) {
+    console.error("missing actor definition. run init");
+    return;
+  }
+  
+  if (debug) {
+    console.log("[DEBUG] Asking actor:", name);
+    console.log("[DEBUG] Question:", question);
+    console.log("[DEBUG] Dependencies:", depsNames.join(", ") || "none");
+    console.log("[DEBUG] Current state:", state);
+  }
+
+  const prompt = `# ACTOR DEFINITION
+${def}
+
+# STATE
+${state}
+
+# DEPENDENCIES STATE
+${deps}
+
+# QUESTION
+${question}`;
+
+  const output = await callLLM([
+    { role: "system", content: askSystemPrompt() },
+    { role: "user", content: prompt },
+  ], debug);
+
+  console.log(output);
+}
+
 // ---- CLI ----
 function parseArgs(args: string[]) {
   let name = "default";
   let force = false;
+  let debug = false;
   const deps: string[] = [];
   const rest: string[] = [];
 
@@ -218,31 +292,39 @@ function parseArgs(args: string[]) {
       deps.push(args[++i]);
     } else if (a === "--force") {
       force = true;
+    } else if (a === "--debug") {
+      debug = true;
     } else {
       rest.push(a);
     }
   }
 
-  return { name, deps, force, rest };
+  return { name, deps, force, debug, rest };
 }
 
 async function main() {
   const [cmd, ...args] = Deno.args;
-  const { name, deps, force, rest } = parseArgs(args);
+  const { name, deps, force, debug, rest } = parseArgs(args);
 
   if (cmd === "init") {
     const desc = rest.join(" ");
-    await initActor(name, desc, force);
+    await initActor(name, desc, force, debug);
     return;
   }
 
   if (cmd === "msg") {
     const input = [cmd, ...rest].join(" ");
-    await runActor(name, input, deps);
+    await runActor(name, input, deps, debug);
     return;
   }
 
-  throw new Error("Missing command: msg or init");
+  if (cmd === "ask") {
+    const question = rest.join(" ");
+    await askActor(name, question, deps, debug);
+    return;
+  }
+
+  throw new Error("Missing command: msg, init, or ask");
 }
 
 if (import.meta.main) main();
