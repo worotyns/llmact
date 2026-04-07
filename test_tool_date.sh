@@ -2,7 +2,10 @@
 set -e
 
 # Test get_current_time tool with gemma4:31b-cloud
-export LLM_MODEL="gemma4:31b-cloud"
+export LLM_MODEL="gemma4:e2b"
+# export LLM_MODEL="gemma4:31b-cloud"
+# export LLM_MODEL="gpt-oss:20b-cloud"
+# export LLM_MODEL="gpt-oss:120b-cloud"
 export LLM_TEMPERATURE=0
 
 cd /Users/worotyns/code/llmact

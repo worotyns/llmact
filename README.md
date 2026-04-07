@@ -28,12 +28,14 @@ Old definitions are backed up as `<name>.definition.md.bak.<timestamp>`.
 
 ## Tool Calling
 
-Actors can use built-in tools for calculations:
+Actors can use built-in tools:
 
 - `calculator(expression)` - Evaluate math (e.g., "10 * 0.30" for tax)
 - `get_current_time()` - Get current datetime
+- `diff_dates(date1, date2)` - Days/hours/minutes between dates
+- `make_date(year, month, day)` - Create date from components
 
-Tool calling works with gemma4:31b-cloud via Ollama. Local models (phi, gpt-oss) do not support function calling.
+Tool calling works with gemma4:31b-cloud via Ollama.
 
 ## Setup
 

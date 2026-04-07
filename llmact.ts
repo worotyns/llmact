@@ -126,6 +126,52 @@ const TOOLS = [
       parameters: { type: "object", properties: {} },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "diff_dates",
+      description: "Calculate difference between two dates. Returns days, hours, minutes between dates.",
+      parameters: {
+        type: "object",
+        properties: {
+          date1: {
+            type: "string",
+            description: "First date (ISO format like '2026-01-01' or '2026-01-01T12:00:00')",
+          },
+          date2: {
+            type: "string",
+            description: "Second date (ISO format like '2026-01-01' or '2026-01-01T12:00:00')",
+          },
+        },
+        required: ["date1", "date2"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "make_date",
+      description: "Create a date string from year, month, and day components.",
+      parameters: {
+        type: "object",
+        properties: {
+          year: {
+            type: "number",
+            description: "Year (e.g., 2026)",
+          },
+          month: {
+            type: "number",
+            description: "Month (1-12)",
+          },
+          day: {
+            type: "number",
+            description: "Day (1-31)",
+          },
+        },
+        required: ["year", "month", "day"],
+      },
+    },
+  },
 ];
 
 function executeTool(name: string, args: Record<string, any>): string {
@@ -141,6 +187,30 @@ function executeTool(name: string, args: Record<string, any>): string {
     }
     case "get_current_time":
       return JSON.stringify({ datetime: new Date().toISOString() });
+    case "diff_dates": {
+      const d1 = new Date(args.date1);
+      const d2 = new Date(args.date2);
+      if (isNaN(d1.getTime()) || isNaN(d2.getTime())) {
+        return JSON.stringify({ error: "Invalid date format" });
+      }
+      const diffMs = Math.abs(d2.getTime() - d1.getTime());
+      const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+      return JSON.stringify({ days, hours, minutes, total_ms: diffMs });
+    }
+    case "make_date": {
+      const { year, month, day } = args;
+      const date = new Date(year, month - 1, day);
+      if (isNaN(date.getTime())) {
+        return JSON.stringify({ error: "Invalid date components" });
+      }
+      return JSON.stringify({ 
+        date: date.toISOString().split("T")[0],
+        datetime: date.toISOString(),
+        weekday: date.toLocaleDateString("en-US", { weekday: "long" })
+      });
+    }
     default:
       return JSON.stringify({ error: `Unknown tool: ${name}` });
   }
@@ -331,8 +401,10 @@ IMPORTANT: If command needs data not in state, check DEPENDENCIES STATE. Fill mi
 AVAILABLE TOOLS:
 - calculator(expression): Calculate math (e.g., "10 * 0.30" for 30% of 10)
 - get_current_time(): Get current datetime
+- diff_dates(date1, date2): Calculate days/hours/minutes between two dates
+- make_date(year, month, day): Create a date from components
 
-Use calculator when you need to compute values like number, tax, commission, totals.
+Use calculator for math. Use date tools for date operations.
 
 OUTPUT FORMAT:
 ## NEW_STATE
