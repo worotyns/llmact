@@ -88,21 +88,87 @@ async function appendFile(path: string, content: string) {
   await Deno.writeTextFile(path, prev + "\n" + content);
 }
 
+// ---- TOOLS ----
+const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "calculator",
+      description: "Evaluate a mathematical expression. Use for calculations like 2+2, 10*5, sqrt(16), etc.",
+      parameters: {
+        type: "object",
+        properties: {
+          expression: {
+            type: "string",
+            description: "Mathematical expression (e.g., '10 * 0.30' or '100 + 50')"
+          }
+        },
+        required: ["expression"]
+      }
+    }
+  },
+  {
+    type: "function", 
+    function: {
+      name: "get_current_time",
+      description: "Get the current date and time.",
+      parameters: { type: "object", properties: {} }
+    }
+  }
+];
+
+function executeTool(name: string, args: Record<string, any>): string {
+  switch (name) {
+    case "calculator": {
+      const expr = args.expression;
+      try {
+        const result = Function(`"use strict"; return (${expr})`)();
+        return JSON.stringify({ result });
+      } catch (e: any) {
+        return JSON.stringify({ error: `Error: ${e.message}` });
+      }
+    }
+    case "get_current_time":
+      return JSON.stringify({ datetime: new Date().toISOString() });
+    default:
+      return JSON.stringify({ error: `Unknown tool: ${name}` });
+  }
+}
+
 // ---- LLM ----
 let totalTokens = 0;
 
-async function callLLM(messages: any[], debug: boolean = false) {
+interface ToolCall {
+  name: string;
+  args: Record<string, any>;
+  result: string;
+}
+
+interface LLMResult {
+  content: string;
+  toolCalls: ToolCall[];
+}
+
+async function callLLM(messages: any[], debug: boolean = false, useTools: boolean = false): Promise<LLMResult> {
+  const body: any = {
+    model: MODEL,
+    temperature: TEMPERATURE,
+    messages,
+  };
+
+  if (useTools) {
+    body.tools = TOOLS;
+    body.tool_choice = "auto";
+    if (debug) console.log(`[DEBUG] Sending ${TOOLS.length} tools: ${TOOLS.map(t => t.function.name).join(", ")}`);
+  }
+
   const res = await fetch(API_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${API_KEY}`,
     },
-    body: JSON.stringify({
-      model: MODEL,
-      temperature: TEMPERATURE,
-      messages,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
@@ -110,21 +176,43 @@ async function callLLM(messages: any[], debug: boolean = false) {
   }
 
   const json = await res.json();
-  const content =
-    json.choices?.[0]?.message?.content || json.message?.content || "";
+  const choice = json.choices?.[0];
+  const allToolCalls: ToolCall[] = [];
+  
+  if (useTools && choice?.message?.tool_calls) {
+    const toolCalls = choice.message.tool_calls;
+    if (debug) console.log(`[TOOL] ${toolCalls.length} call(s)`);
+    
+    const toolResults = toolCalls.map((tc: any) => {
+      const args = JSON.parse(tc.function.arguments);
+      const result = executeTool(tc.function.name, args);
+      if (debug) console.log(`[TOOL] ${tc.function.name}(${JSON.stringify(args)}) = ${result}`);
+      allToolCalls.push({ name: tc.function.name, args, result });
+      return {
+        tool_call_id: tc.id,
+        role: "tool",
+        name: tc.function.name,
+        content: result
+      };
+    });
+
+    messages.push(choice.message, ...toolResults);
+    const recursiveResult = await callLLM(messages, debug, false);
+    return {
+      content: recursiveResult.content,
+      toolCalls: [...allToolCalls, ...recursiveResult.toolCalls]
+    };
+  }
+
+  const content = choice?.message?.content || "";
 
   if (debug) {
     const usage = json.usage || {};
-    const promptTokens = usage.prompt_tokens || 0;
-    const completionTokens = usage.completion_tokens || 0;
-    const total = usage.total_tokens || 0;
-    totalTokens += total;
-    console.log(
-      `[DEBUG] Tokens: prompt=${promptTokens}, completion=${completionTokens}, total=${total}, cumulative=${totalTokens}`,
-    );
+    totalTokens += usage.total_tokens || 0;
+    console.log(`[DEBUG] Tokens: total=${usage.total_tokens || 0}, cumulative=${totalTokens}`);
   }
 
-  return content;
+  return { content, toolCalls: allToolCalls };
 }
 
 // ---- INIT ----
@@ -180,7 +268,7 @@ async function initActor(
       console.log("[DEBUG] Description:", desc);
     }
 
-    const output = await callLLM(
+    const result = await callLLM(
       [
         { role: "system", content: initSystemPrompt() },
         { role: "user", content: `${desc}\n\n[Request ID: ${requestId}]` },
@@ -188,6 +276,7 @@ async function initActor(
       debug,
     );
 
+    const output = result.content;
     const defMatch = output.match(/---DEFINITION---([\s\S]*?)---STATE---/);
     const stateMatch = output.match(/---STATE---([\s\S]*)/);
 
@@ -215,6 +304,12 @@ CRITICAL:
 4. No code blocks, no explanations
 
 IMPORTANT: If command needs data not in state, check DEPENDENCIES STATE. Fill missing info from deps.
+
+AVAILABLE TOOLS:
+- calculator(expression): Calculate math (e.g., "10 * 0.30" for 30% of 10)
+- get_current_time(): Get current datetime
+
+Use calculator when you need to compute values like tax, commission, totals.
 
 OUTPUT FORMAT:
 ## NEW_STATE
@@ -327,19 +422,24 @@ async function runActor(
     let parsed = null;
     let lastOutput = "";
     let lastError = "";
+    let allToolCalls: ToolCall[] = [];
 
     for (let i = 0; i <= retries; i++) {
       if (i > 0 && debug) {
         console.log(`[DEBUG] Retry ${i}/${retries}`);
       }
 
-      lastOutput = await callLLM(
+      const result = await callLLM(
         [
           { role: "system", content: runSystemPrompt() },
           { role: "user", content: buildPrompt(def, state, deps, input) },
         ],
         debug,
+        true, // useTools
       );
+      
+      lastOutput = result.content;
+      allToolCalls.push(...result.toolCalls);
 
       parsed = parseOutput(lastOutput);
 
@@ -355,10 +455,15 @@ async function runActor(
     }
 
     await Deno.writeTextFile(sf, parsed.state);
-    await appendFile(
-      mf,
-      `\n## ${new Date().toISOString()}\n${input}\n\n${parsed.log}`,
-    );
+    
+    let logEntry = `## ${new Date().toISOString()}\n${input}\n\n${parsed.log}`;
+    if (allToolCalls.length > 0) {
+      const toolLog = allToolCalls.map(tc => 
+        `[TOOL] ${tc.name}(${JSON.stringify(tc.args)}) = ${tc.result}`
+      ).join("\n");
+      logEntry += `\n\n${toolLog}`;
+    }
+    await appendFile(mf, `\n${logEntry}`);
 
     if (debug) {
       console.log("[DEBUG] Prompt sent:");
@@ -421,7 +526,7 @@ ${deps}
 # QUESTION
 ${question}`;
 
-    const output = await callLLM(
+    const result = await callLLM(
       [
         { role: "system", content: askSystemPrompt() },
         { role: "user", content: prompt },
@@ -429,7 +534,114 @@ ${question}`;
       debug,
     );
 
-    console.log(output);
+    console.log(result.content);
+  } finally {
+    release();
+  }
+}
+
+// ---- EVOLVE ----
+function evolveSystemPrompt() {
+  return `ACTOR EVOLUTION ENGINE. Improve actor definition based on performance.
+
+CRITICAL:
+1. Output MUST start with "---EVOLVED---"
+2. Analyze recent messages for errors, confusion, or edge cases
+3. Suggest specific improvements to Logic or Rules
+4. Keep changes minimal and focused
+5. If definition is good, output "---NO_CHANGES---" only
+
+OUTPUT FORMAT:
+
+---EVOLVED---
+# Actor
+[Improved one-line name and purpose]
+
+## Logic
+- [Improved 1-3 rules]
+
+## Rules
+- [Keep existing rules]
+
+---END---
+
+OR simply:
+
+---NO_CHANGES---
+Definition is adequate.`;
+}
+
+async function evolveActor(
+  name: string,
+  issue: string,
+  debug: boolean,
+) {
+  const release = await acquireLock(name, debug);
+  const requestId = crypto.randomUUID().slice(0, 8);
+
+  try {
+    const df = defFile(name);
+    const sf = stateFile(name);
+    const mf = messagesFile(name);
+
+    const def = await readFileSafe(df);
+    const state = await readFileSafe(sf);
+    const messages = await readFileSafe(mf);
+
+    if (!def) {
+      console.error("missing actor definition. run init");
+      return;
+    }
+
+    if (debug) {
+      console.log("[DEBUG] Evolving actor:", name);
+      console.log("[DEBUG] Issue:", issue);
+    }
+
+    const prompt = `# CURRENT DEFINITION
+${def}
+
+# CURRENT STATE
+${state}
+
+# RECENT MESSAGES
+${messages.slice(-2000)}
+
+# ISSUE TO ADDRESS
+${issue}
+
+${requestId ? `\n[Request ID: ${requestId}]` : ""}`;
+
+    const result = await callLLM(
+      [
+        { role: "system", content: evolveSystemPrompt() },
+        { role: "user", content: prompt },
+      ],
+      debug,
+    );
+
+    const output = result.content;
+    if (output.includes("---NO_CHANGES---")) {
+      console.log("Definition is adequate, no changes needed.");
+      return;
+    }
+
+    const evolvedMatch = output.match(/---EVOLVED---([\s\S]*?)---END---/);
+    if (evolvedMatch) {
+      const newDef = evolvedMatch[1].trim();
+      const backupPath = `${df}.bak.${Date.now()}`;
+      await Deno.writeTextFile(backupPath, def);
+      await Deno.writeTextFile(df, newDef);
+      console.log("✅ Actor definition evolved");
+      console.log(`   Backup saved: ${backupPath.split("/").pop()}`);
+      if (debug) {
+        console.log("\n--- NEW DEFINITION ---");
+        console.log(newDef);
+      }
+    } else {
+      console.error("Failed to parse evolution output");
+      if (debug) console.log(output);
+    }
   } finally {
     release();
   }
@@ -494,7 +706,14 @@ async function main() {
     return;
   }
 
-  throw new Error("Missing command: msg, init, ask, or stats");
+  if (cmd === "evolve") {
+    const issue = rest.join(" ");
+    await evolveActor(name, issue, debug);
+    if (stats) console.log(`\n[STATS] Session tokens: ${totalTokens}`);
+    return;
+  }
+
+  throw new Error("Missing command: msg, init, ask, evolve, or stats");
 }
 
 if (import.meta.main) main();
